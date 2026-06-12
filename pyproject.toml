@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "nonebot-plugin-keyreply"
-version = "0.1.4"
+version = "0.1.5"
 description = "基于NoneBot2的轻量级关键词自动回复插件"
 authors = ["yuexps@qq.com"]
 readme = "README.md"

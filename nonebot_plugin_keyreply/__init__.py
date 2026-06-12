@@ -44,6 +44,10 @@ async def handle_reply(bot: Bot, event: MessageEvent, command_arg: Message = Com
     if not args_str:
         await reply_cmd.finish(__plugin_meta__.usage)
 
+    # 先转义反斜杠，再将真换行符替换为转义后的 \\n，防止 shlex.split 剥离
+    args_str = args_str.replace("\r", "")
+    args_str = args_str.replace("\\", "\\\\").replace("\n", "\\\\n")
+
     # 解析参数
     try:
         args = shlex.split(args_str)
@@ -86,8 +90,8 @@ async def handle_reply(bot: Bot, event: MessageEvent, command_arg: Message = Com
         else:
             group_id = str(event.group_id) if isinstance(event, GroupMessageEvent) else "private"
 
-        key = clean_args[0]
-        reply = " ".join(clean_args[1:])
+        key = clean_args[0].replace("\\n", "\n")
+        reply = " ".join(clean_args[1:]).replace("\\n", "\n")
 
         match_types = {"exact": "精确匹配", "fuzzy": "模糊匹配", "regex": "正则匹配"}
         rule_manager.add_rule(key, reply, match_type, group_id)
@@ -123,8 +127,8 @@ async def handle_reply(bot: Bot, event: MessageEvent, command_arg: Message = Com
         else:
             group_id = str(event.group_id) if isinstance(event, GroupMessageEvent) else "private"
 
-        key = clean_args[0]
-        reply = " ".join(clean_args[1:])
+        key = clean_args[0].replace("\\n", "\n")
+        reply = " ".join(clean_args[1:]).replace("\\n", "\n")
 
         success = rule_manager.edit_rule(key, reply, group_id)
         if success:
@@ -162,7 +166,7 @@ async def handle_reply(bot: Bot, event: MessageEvent, command_arg: Message = Com
         else:
             group_id = str(event.group_id) if isinstance(event, GroupMessageEvent) else "private"
             
-        key = clean_args[0]
+        key = clean_args[0].replace("\\n", "\n")
 
         success = rule_manager.del_rule(key, group_id)
         if success:
@@ -237,7 +241,7 @@ async def handle_reply(bot: Bot, event: MessageEvent, command_arg: Message = Com
                 await reply_cmd.finish("当前生效的词条关键词列表：\n" + "\n".join(msg_parts))
         else:
             # 查询指定关键词
-            key = clean_args[0]
+            key = clean_args[0].replace("\\n", "\n")
             rule = rule_manager.get_rule(key, group_id)
             if not rule and group_id != "global":
                 # 在当前上下文没找到时，也去全局找一下
