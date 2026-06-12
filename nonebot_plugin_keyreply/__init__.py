@@ -1,32 +1,32 @@
 import shlex
-from nonebot import get_plugin_config, on_command, on_message
+from nonebot import on_command, on_message, require
 from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, MessageEvent
 from nonebot.adapters.onebot.v11.permission import GROUP_ADMIN, GROUP_OWNER
 from nonebot.params import CommandArg
 from nonebot.permission import SUPERUSER
 from nonebot.plugin import PluginMetadata
 
-from .config import Config
+require("nonebot_plugin_localstore")
+import nonebot_plugin_localstore as store
+
 from .rule_manager import RuleManager
 
 __plugin_meta__ = PluginMetadata(
     name="KeyReply",
-    description="根据设定好的关键词进行自动回复词条的插件",
+    description="基于 NoneBot2 的轻量级关键词自动回复插件",
     usage=(
         "管理指令：/reply\n"
-        "1. 添加：/reply add [-f 模糊 | -r 正则] [-g 全局] <关键词> <回复内容>\n"
-        "2. 修改：/reply edit [-g 全局] <关键词> <新回复内容>\n"
-        "3. 删除：/reply del [-g 全局] <关键词>\n"
-        "4. 列表/查看：/reply list [-g 全局] [关键词]"
+        "1. 添加：/reply add [-f 模糊 | -r 正则] [-g 全局 | -p 私聊] <关键词> <回复内容>\n"
+        "2. 修改：/reply edit [-g 全局 | -p 私聊] <关键词> <新回复内容>\n"
+        "3. 删除：/reply del [-g 全局 | -p 私聊] <关键词>\n"
+        "4. 列表/查看：/reply list [-g 全局 | -p 私聊] [关键词]"
     ),
     type="application",
-    homepage="https://github.com/yuyue/nonebot-plugin-keyreply",
-    config=Config,
+    homepage="https://github.com/yuexps/nonebot-plugin-keyreply",
     supported_adapters={"~onebot.v11"},
 )
 
-config = get_plugin_config(Config)
-rule_manager = RuleManager(config.keyreply_data_path)
+rule_manager = RuleManager(store.get_plugin_data_file("rules.json"))
 
 # 管理命令
 reply_cmd = on_command(
@@ -54,9 +54,9 @@ async def handle_reply(bot: Bot, event: MessageEvent, command_arg: Message = Com
     is_superuser = await SUPERUSER(bot, event)
 
     if sub_cmd == "add":
-        # 解析参数
         match_type = "exact"
         is_global = False
+        is_private = False
         clean_args = []
         for arg in args[1:]:
             if arg in ("-f", "--fuzzy"):
@@ -65,110 +65,187 @@ async def handle_reply(bot: Bot, event: MessageEvent, command_arg: Message = Com
                 match_type = "regex"
             elif arg in ("-g", "--global"):
                 is_global = True
+            elif arg in ("-p", "--private"):
+                is_private = True
             else:
                 clean_args.append(arg)
 
         if len(clean_args) < 2:
-            await reply_cmd.finish("格式错误：reply add [-f|-r] [-g] <关键词> <回复内容>")
+            await reply_cmd.finish("格式错误：reply add [-f|-r] [-g|-p] <关键词> <回复内容>")
 
-        if is_global and not is_superuser:
-            await reply_cmd.finish("权限不足：仅超级用户有权配置全局词条")
+        if is_global and is_private:
+            await reply_cmd.finish("格式错误：不能同时指定全局(-g)和私聊(-p)")
 
-        group_id = "global" if (is_global or not isinstance(event, GroupMessageEvent)) else str(event.group_id)
+        if (is_global or is_private) and not is_superuser:
+            await reply_cmd.finish("权限不足：仅超级用户有权配置全局/私聊词条")
+
+        if is_global:
+            group_id = "global"
+        elif is_private:
+            group_id = "private"
+        else:
+            group_id = str(event.group_id) if isinstance(event, GroupMessageEvent) else "private"
+
         key = clean_args[0]
         reply = " ".join(clean_args[1:])
 
         match_types = {"exact": "精确匹配", "fuzzy": "模糊匹配", "regex": "正则匹配"}
         rule_manager.add_rule(key, reply, match_type, group_id)
-        scope = "全局" if group_id == "global" else f"群 {group_id}"
+        scope_map = {"global": "全局", "private": "私聊"}
+        scope = scope_map.get(group_id, f"群 {group_id}")
         await reply_cmd.finish(f"添加成功！[{scope}] 关键词「{key}」-> 「{reply}」[类型: {match_types.get(match_type, match_type)}]")
 
     elif sub_cmd == "edit":
         is_global = False
+        is_private = False
         clean_args = []
         for arg in args[1:]:
             if arg in ("-g", "--global"):
                 is_global = True
+            elif arg in ("-p", "--private"):
+                is_private = True
             else:
                 clean_args.append(arg)
 
         if len(clean_args) < 2:
-            await reply_cmd.finish("格式错误：reply edit [-g] <关键词> <新回复内容>")
+            await reply_cmd.finish("格式错误：reply edit [-g|-p] <关键词> <新回复内容>")
 
-        if is_global and not is_superuser:
-            await reply_cmd.finish("权限不足：仅超级用户有权配置全局词条")
+        if is_global and is_private:
+            await reply_cmd.finish("格式错误：不能同时指定全局(-g)和私聊(-p)")
 
-        group_id = "global" if (is_global or not isinstance(event, GroupMessageEvent)) else str(event.group_id)
+        if (is_global or is_private) and not is_superuser:
+            await reply_cmd.finish("权限不足：仅超级用户有权配置全局/私聊词条")
+
+        if is_global:
+            group_id = "global"
+        elif is_private:
+            group_id = "private"
+        else:
+            group_id = str(event.group_id) if isinstance(event, GroupMessageEvent) else "private"
+
         key = clean_args[0]
         reply = " ".join(clean_args[1:])
 
         success = rule_manager.edit_rule(key, reply, group_id)
         if success:
-            scope = "全局" if group_id == "global" else f"群 {group_id}"
+            scope_map = {"global": "全局", "private": "私聊"}
+            scope = scope_map.get(group_id, f"群 {group_id}")
             await reply_cmd.finish(f"修改成功！已覆盖 [{scope}] 关键词「{key}」的回复")
         else:
             await reply_cmd.finish(f"修改失败：未找到该范围内对应的关键词「{key}」")
 
     elif sub_cmd == "del":
         is_global = False
+        is_private = False
         clean_args = []
         for arg in args[1:]:
             if arg in ("-g", "--global"):
                 is_global = True
+            elif arg in ("-p", "--private"):
+                is_private = True
             else:
                 clean_args.append(arg)
 
         if len(clean_args) < 1:
-            await reply_cmd.finish("格式错误：reply del [-g] <关键词>")
+            await reply_cmd.finish("格式错误：reply del [-g|-p] <关键词>")
 
-        if is_global and not is_superuser:
-            await reply_cmd.finish("权限不足：仅超级用户有权配置全局词条")
+        if is_global and is_private:
+            await reply_cmd.finish("格式错误：不能同时指定全局(-g)和私聊(-p)")
 
-        group_id = "global" if (is_global or not isinstance(event, GroupMessageEvent)) else str(event.group_id)
+        if (is_global or is_private) and not is_superuser:
+            await reply_cmd.finish("权限不足：仅超级用户有权配置全局/私聊词条")
+
+        if is_global:
+            group_id = "global"
+        elif is_private:
+            group_id = "private"
+        else:
+            group_id = str(event.group_id) if isinstance(event, GroupMessageEvent) else "private"
+            
         key = clean_args[0]
 
         success = rule_manager.del_rule(key, group_id)
         if success:
-            scope = "全局" if group_id == "global" else f"群 {group_id}"
+            scope_map = {"global": "全局", "private": "私聊"}
+            scope = scope_map.get(group_id, f"群 {group_id}")
             await reply_cmd.finish(f"删除成功！已移除 [{scope}] 关键词「{key}」")
         else:
             await reply_cmd.finish(f"删除失败：未找到该范围内对应的关键词「{key}」")
 
     elif sub_cmd == "list":
         is_global = False
+        is_private = False
         clean_args = []
         for arg in args[1:]:
             if arg in ("-g", "--global"):
                 is_global = True
+            elif arg in ("-p", "--private"):
+                is_private = True
             else:
                 clean_args.append(arg)
 
-        group_id = "global" if (is_global or not isinstance(event, GroupMessageEvent)) else str(event.group_id)
+        if is_global and is_private:
+            await reply_cmd.finish("格式错误：不能同时指定全局(-g)和私聊(-p)")
+
+        if is_global:
+            group_id = "global"
+        elif is_private:
+            group_id = "private"
+        else:
+            group_id = str(event.group_id) if isinstance(event, GroupMessageEvent) else "private"
 
         if len(clean_args) == 0:
-            # 获取当前上下文生效的词条列表
-            if is_global:
-                rules = [r for r in rule_manager.rules if r.group_id == "global"]
+            if is_global or group_id == "global":
+                rules = rule_manager.get_rules_for_group("global")
+                if not rules:
+                    await reply_cmd.finish("当前无生效的全局词条")
+                lines = [f"- {r.key}" for r in rules]
+                await reply_cmd.finish("当前生效的全局词条关键词列表：\n" + "\n".join(lines))
+            elif is_private or group_id == "private":
+                private_rules = rule_manager.get_rules_for_group("private")
+                global_rules = rule_manager.get_rules_for_group("global")
+                if not private_rules and not global_rules:
+                    await reply_cmd.finish("当前无生效的私聊词条")
+
+                msg_parts = []
+                if private_rules:
+                    msg_parts.append("【私聊词条】")
+                    msg_parts.extend(f"- {r.key}" for r in private_rules)
+                if global_rules:
+                    if msg_parts:
+                        msg_parts.append("")
+                    msg_parts.append("【全局词条】")
+                    msg_parts.extend(f"- {r.key}" for r in global_rules)
+
+                await reply_cmd.finish("当前生效的词条关键词列表：\n" + "\n".join(msg_parts))
             else:
-                rules = rule_manager.get_rules_for_group(group_id)
+                group_rules = rule_manager.get_rules_for_group(group_id)
+                global_rules = rule_manager.get_rules_for_group("global")
+                if not group_rules and not global_rules:
+                    await reply_cmd.finish("当前无生效的词条")
 
-            if not rules:
-                await reply_cmd.finish("当前无生效 of 词条")
+                msg_parts = []
+                if group_rules:
+                    msg_parts.append("【本群词条】")
+                    msg_parts.extend(f"- {r.key}" for r in group_rules)
+                if global_rules:
+                    if msg_parts:
+                        msg_parts.append("")
+                    msg_parts.append("【全局词条】")
+                    msg_parts.extend(f"- {r.key}" for r in global_rules)
 
-            lines = []
-            for r in rules:
-                lines.append(f"- {r.key}")
-            await reply_cmd.finish("当前生效的词条关键词列表：\n" + "\n".join(lines))
+                await reply_cmd.finish("当前生效的词条关键词列表：\n" + "\n".join(msg_parts))
         else:
             # 查询指定关键词
             key = clean_args[0]
             rule = rule_manager.get_rule(key, group_id)
             if not rule and group_id != "global":
-                # 在当前群没找到时，也去全局找一下
+                # 在当前上下文没找到时，也去全局找一下
                 rule = rule_manager.get_rule(key, "global")
 
             if rule:
-                scope = "全局" if rule.group_id == "global" else f"群 {rule.group_id}"
+                scope_map = {"global": "全局", "private": "私聊"}
+                scope = scope_map.get(rule.group_id, f"群 {rule.group_id}")
                 match_types = {"exact": "精确匹配", "fuzzy": "模糊匹配", "regex": "正则匹配"}
                 reply_text = (
                     f"词条信息：\n"
@@ -194,7 +271,7 @@ async def handle_message(bot: Bot, event: MessageEvent):
     if not text:
         return
 
-    group_id = str(event.group_id) if isinstance(event, GroupMessageEvent) else "global"
+    group_id = str(event.group_id) if isinstance(event, GroupMessageEvent) else "private"
     matched = rule_manager.match(text, group_id)
     if matched:
         await message_reply.send(message=matched.reply)
